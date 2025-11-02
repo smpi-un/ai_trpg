@@ -1,10 +1,14 @@
 import logging
 import os
+from dotenv import load_dotenv
 from engine import GameEngine
 from logger_config import setup_logging
 
 # --- 実行 ---
 if __name__ == "__main__":
+    # .envファイルから環境変数を読み込む
+    load_dotenv()
+    
     # ロギングを設定
     setup_logging()
 

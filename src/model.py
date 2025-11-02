@@ -1,8 +1,10 @@
 import logging
+import json
+from typing import List, Union
 
 # --- 1. Model (データベースMCP) ---
 # ゲームの状態（ステータス、アイテム、シナリオ）を管理する。
-class DatabaseMCP:
+class MCP:
     """
     [Model] 
     ゲームのデータベースとメモリを管理する。
@@ -10,81 +12,84 @@ class DatabaseMCP:
     """
     def __init__(self):
         logging.debug("[MCP Init: Model (Database) が起動しました]")
-        self._player = {"HP": 10, "ATK": 3, "アイテム": ["やくそう"], "状態": "正常"}
+        self._player = {"HP": 10, "ATK": 3, "アイテム": [], "状態": "正常", "能力": {"腕力": 0, "知力": 0, "器用": 0}}
         self._enemies = {} # 戦闘中の敵を管理
+        self._world_state = {"door_locked": True} # 世界の状態を管理
         self._current_scene_id = "start"
         
         self._enemy_templates = {
             "goblin": {"name": "ゴブリン", "HP": 5, "ATK": 2}
         }
-        
-        self._game_book = {
-            "start": {
-                "text": "あなたは暗い洞窟の入り口に立っている。\n奥からは獣のようなうなり声が聞こえる。",
-                "options": ["すすむ", "あたりをみる", "アイテム"]
-            },
-            "look_around": {
-                "text": "入り口の周りにはコケが生えている。特に変わったものはない。",
-                "options": ["すすむ"]
-            },
-            "encounter_goblin": {
-                "text": "一歩足を踏み入れると、目の前にゴブリンが現れた！",
-                "trigger": "start_battle:goblin"
-            },
-            "battle_turn": {
-                "text": "ゴブリンはこちらを睨んでいる。",
-                "options": ["たたかう", "アイテム", "にげる"]
-            },
-            "victory": {
-                "text": "ゴブリンを倒した！奥に宝箱が見える。",
-                "options": ["あける"]
-            },
-            "treasure": {
-                "text": "宝箱を開けた。中には「どうのつるぎ」(ATK+2) が入っていた！\nあなたは洞窟を後にした。",
-                "trigger": "get_item:どうのつるぎ"
-            },
-            "escape": {"text": "あなたはゴブリンから逃げ出した...", "options": ["end"]},
-            "dead": {"text": "あなたはゴブリンに倒されてしまった...", "options": ["end"]}
-        }
 
-    def get_data(self, target, key):
+    def get_data(self, target: str, key: str = None):
         """[MCP:Model] データを取得するツール"""
         logging.debug(f"[Tool Call (Model): get_data(target={target}, key={key}) を実行]")
         if target == "player":
-            return self._player.get(key)
-        if target in self._enemies:
-            return self._enemies[target].get(key)
+            return self._player if key is None else self._player.get(key)
+        if target == "world":
+            return self._world_state if key is None else self._world_state.get(key)
+        if target == "enemies":
+            return self._enemies if key is None else self._enemies.get(key)
+        if target in self._enemies: # For a specific enemy
+            return self._enemies[target] if key is None else self._enemies[target].get(key)
         return None
 
-    def update_data(self, target, key, value, relative=False):
-        """[MCP:Model] データを更新するツール"""
-        logging.debug(f"[Tool Call (Model): update_data(target={target}, key={key}, value={value}, relative={relative}) を実行]")
+    def update_data(self, target: str, key_json: str, value_json: str, relative: bool = False):
+        """[MCP:Model] データを更新する。keyとvalueはJSON文字列で渡す。単一のキーは"key"、ネストしたキーは["key1", "key2"]のように表現する。"""
+        logging.debug(f"[Tool Call (Model): update_data(target={target}, key_json={key_json}, value_json={value_json}, relative={relative}) を実行]")
+        
+        try:
+            key = json.loads(key_json)
+            value = json.loads(value_json)
+        except json.JSONDecodeError as e:
+            return f"JSONの解析に失敗しました: {e}"
+
         target_obj = None
         if target == "player":
             target_obj = self._player
+        elif target == "world":
+            target_obj = self._world_state
         elif target in self._enemies:
             target_obj = self._enemies[target]
         
-        if target_obj:
-            if relative:
-                target_obj[key] = target_obj.get(key, 0) + value
+        if not target_obj:
+            return f"対象{target}が見つからない"
+
+        # ネストしたキーを処理
+        if isinstance(key, list):
+            final_key = key[-1]
+            nav_obj = target_obj
+            for k in key[:-1]:
+                if k not in nav_obj or not isinstance(nav_obj[k], dict):
+                    nav_obj[k] = {}
+                nav_obj = nav_obj[k]
+            target_obj = nav_obj
+            key = final_key
+        else:
+            key = str(key) # Ensure key is a string
+
+        # 値を更新
+        if relative:
+            current_value = target_obj.get(key, 0)
+            if isinstance(current_value, (int, float)) and isinstance(value, (int, float)):
+                target_obj[key] = current_value + value
             else:
                 target_obj[key] = value
-            return f"{target}の{key}が{target_obj[key]}になった"
-        return f"対象{target}が見つからない"
+        else:
+            target_obj[key] = value
+            
+        return f"{target}の{key}が{target_obj.get(key)}になった"
 
-    def get_scene(self, scene_id=None):
-        """[MCP:Model] ゲームブック（シナリオ）をめくるツール"""
-        if scene_id is None:
-            scene_id = self._current_scene_id
-        logging.debug(f"[Tool Call (Model): get_scene(scene_id={scene_id}) を実行]")
-        return self._game_book.get(scene_id)
+    def get_scene_id(self):
+        """[MCP:Model] 現在のシーンIDを取得する"""
+        logging.debug(f"[Tool Call (Model): get_scene_id() を実行]")
+        return self._current_scene_id
 
     def set_current_scene(self, scene_id):
         """[MCP:Model] 現在のシーンIDを設定するツール"""
         logging.debug(f"[Tool Call (Model): set_current_scene(scene_id={scene_id}) を実行]")
         self._current_scene_id = scene_id
-        return self.get_scene(scene_id)
+        return f"現在のシーンが {scene_id} に設定されました。"
 
     def manage_enemy(self, action, enemy_id, data=None):
         """[MCP:Model] 敵のデータを管理するツール"""
